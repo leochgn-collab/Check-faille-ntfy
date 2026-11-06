@@ -10,7 +10,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from core import log, ntfy_send
+from core import log, ntfy_send, quiet_until
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 SESSION_TTL = 7 * 24 * 3600
@@ -76,6 +76,7 @@ class WebApp:
 
         class Handler(BaseHTTPRequestHandler):
             server_version = "veilleur-cve"
+            timeout = 30  # coupe les connexions lentes / bloquées
             sys_version = ""
 
             def log_message(self, *a):
@@ -102,7 +103,7 @@ class WebApp:
 
             def read_json(self):
                 n = int(self.headers.get("Content-Length") or 0)
-                if n > 65536:
+                if n < 0 or n > 65536:
                     raise ValueError("Requête trop grosse")
                 raw = self.rfile.read(n) if n else b"{}"
                 return json.loads(raw or b"{}")
@@ -180,6 +181,10 @@ class WebApp:
                 if path == "/api/check-now":
                     if app.watcher.busy:
                         return self.send_json(409, {"error": "Une vérification est déjà en cours"})
+                    quiet = quiet_until(app.config.get())
+                    if quiet:
+                        return self.send_json(409, {"error": "Heures calmes : rien n'est vérifié ni envoyé "
+                                                             "avant la fin de la plage"})
                     app.watcher.trigger()
                     return self.send_json(200, {"ok": True})
                 self.send_json(404, {"error": "Introuvable"})

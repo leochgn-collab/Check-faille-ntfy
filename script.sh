@@ -91,7 +91,7 @@ env_get() { [ -f .env ] && grep -E "^$1=" .env | tail -1 | cut -d= -f2- | sed "s
 write_env() {
   ( umask 077
     cat > .env <<EOF
-# Généré par ./script.sh le $(date '+%d/%m/%Y %H:%M')
+${ENV_HEADER:-# Généré par ./script.sh le $(date '+%d/%m/%Y %H:%M')}
 WEB_PASSWORD='$WEB_PASSWORD'
 WEB_PORT=$WEB_PORT
 WEB_BIND=$WEB_BIND
@@ -208,23 +208,27 @@ configure_ntfy() {
 
 configure_filters() {
   title "Quelles failles veux-tu recevoir ?"
-  local levels=(NONE LOW MEDIUM HIGH CRITICAL) def=4 i sev kw kev
+  local levels=(NONE LOW MEDIUM HIGH CRITICAL) def=1 i sev kw kev
   for i in "${!levels[@]}"; do
-    [ "${levels[$i]}" = "${CUR[min_severity]:-HIGH}" ] && def=$((i + 1))
+    [ "${levels[$i]}" = "${CUR[min_severity]:-NONE}" ] && def=$((i + 1))
   done
   choose sev "Gravité minimale" "$def" \
-    "Toutes (~100 à 150 notifications / jour !)" \
+    "Toutes (conseillé avec le filtre Proxmox : quelques-unes par mois)" \
     "Faible et plus" \
     "Moyenne et plus" \
-    "Élevée et critique (~20 à 40 / jour, conseillé)" \
+    "Élevée et critique" \
     "Critique uniquement"
   set_cfg MIN_SEVERITY "${levels[$((sev - 1))]}"
 
   echo
-  echo "  ${D}Mots-clés : ne garder que les failles qui parlent de certains logiciels"
-  echo "  (ex : debian,apache,php,openssh,docker). Vide = toutes. « - » = effacer.${N}"
-  ask kw "Mots-clés" "${CUR[keywords]:-}"
-  [ "$kw" = "-" ] && kw=""
+  echo "  ${D}Logiciels surveillés : le veilleur ne cherche QUE les failles qui en parlent."
+  echo "  Plusieurs possibles, séparés par des virgules (ex : proxmox,qemu,lxc).${N}"
+  while true; do
+    ask kw "Logiciels surveillés" "${CUR[keywords]:-proxmox}"
+    [ "$kw" = "-" ] && kw=""
+    [ -n "$kw" ] && break
+    yesno "Aucun filtre = TOUTES les failles du monde (~100 à 150 / jour). Sûr ?" n && break
+  done
   set_cfg KEYWORDS "$kw"
 
   echo
@@ -352,10 +356,10 @@ do_configure() {
 
   # .env provisoire pour que docker compose puisse tourner
   FRESH=0
-  if [ ! -f .env ]; then
+  if [ ! -f .env ] || grep -q '^# PROVISOIRE' .env; then
     FRESH=1
     WEB_PASSWORD=$(gen_password); WEB_PORT=8080; WEB_BIND=127.0.0.1
-    write_env
+    ENV_HEADER="# PROVISOIRE (configuration pas terminée)" write_env
   fi
 
   title "Préparation"

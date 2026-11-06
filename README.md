@@ -1,5 +1,8 @@
 # 🛡️ Veilleur CVE → ntfy
 
+Par défaut, il ne surveille **que les failles Proxmox** (modifiable : « Logiciels surveillés »
+dans `./script.sh` ou l'interface web).
+
 Surveille 24h/24 les nouvelles failles de sécurité et t'envoie une notification ntfy
 pour chacune, avec une priorité qui dépend de sa gravité. Le tout se règle depuis
 une interface web.
@@ -95,9 +98,8 @@ nuit arrive le matin. Réglable dans l'interface.
 
 ## Bon à savoir
 
-- **Volume** : ~100 à 150 nouvelles CVE par jour. « Élevée et plus » ramène ça à
-  ~20–40/jour ; des mots-clés comme `debian,apache,php,openssh` à quelques-unes
-  par semaine, mais qui te concernent.
+- **Volume** : avec le filtre Proxmox, quelques failles par mois. Sans filtre, c'est
+  ~100 à 150 nouvelles CVE par jour.
 - **Failles pas encore notées** : le NVD met parfois quelques jours à donner un
   score. Avec un seuil, la faille est envoyée dès qu'elle reçoit son score.
 - **Pas de doublons, rien de perdu** : si ntfy est injoignable, les alertes sont

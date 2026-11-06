@@ -167,15 +167,15 @@
         <div class="fields">
           <div><label>Gravité minimale</label>
             <select name="min_severity">
-              <option value="NONE">Toutes (~100 à 150 / jour)</option>
+              <option value="NONE">Toutes</option>
               <option value="LOW">Faible et plus</option>
               <option value="MEDIUM">Moyenne et plus</option>
-              <option value="HIGH">Élevée et plus (~20 à 40 / jour)</option>
+              <option value="HIGH">Élevée et plus</option>
               <option value="CRITICAL">Critique uniquement</option>
             </select></div>
-          <div><label>Mots-clés (séparés par des virgules)</label>
-            <input name="keywords" placeholder="debian, apache, php, openssh">
-            <div class="hint">Vide = toutes les failles. Sinon, seules celles qui mentionnent un de ces mots.</div></div>
+          <div><label>Logiciels surveillés (séparés par des virgules)</label>
+            <input name="keywords" placeholder="proxmox">
+            <div class="hint">Le veilleur ne cherche que les failles qui en parlent. Vide = toutes les failles (~100 à 150 / jour).</div></div>
           <div><label>Ignorer les CVE publiées il y a plus de (jours)</label><input type="number" name="max_age_days" min="1" max="60"></div>
         </div>
         <div style="margin-top:14px" class="check"><input type="checkbox" name="kev_enabled" id="kev">

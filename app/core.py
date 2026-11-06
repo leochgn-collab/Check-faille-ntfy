@@ -38,6 +38,9 @@ SEVERITY_STYLE = {
     None: (2, ["white_circle"], "NON NOTÉE"),
 }
 
+SEVERITY_FR = {"NONE": "toutes", "LOW": "faible", "MEDIUM": "moyenne", "HIGH": "élevée",
+               "CRITICAL": "critique"}
+
 DEFAULTS = {
     "ntfy_url": "https://ntfy.sh",
     "ntfy_topic": "",
@@ -45,8 +48,9 @@ DEFAULTS = {
     "ntfy_password": "",
     "ntfy_token": "",
     "nvd_api_key": "",
-    "min_severity": "HIGH",
-    "keywords": [],
+    "min_severity": "NONE",
+    # le veilleur ne cherche que les failles qui parlent de ces logiciels
+    "keywords": ["proxmox"],
     "check_interval_min": 15,
     "max_age_days": 7,
     "kev_enabled": True,
@@ -322,16 +326,20 @@ def nvd_date(dt):
     return dt.strftime("%Y-%m-%dT%H:%M:%S.000+00:00")
 
 
-def nvd_fetch(cfg, start, end, stop_event):
-    """CVE créées OU modifiées dans la fenêtre (attrape celles qui reçoivent leur score)."""
+def nvd_fetch(cfg, start, end, stop_event, keyword=None):
+    """CVE créées OU modifiées dans la fenêtre (attrape celles qui reçoivent leur score).
+    Avec `keyword`, le NVD ne renvoie que les CVE qui contiennent ce mot."""
     headers = {"apiKey": cfg["nvd_api_key"]} if cfg["nvd_api_key"] else {}
     delay = 0.7 if cfg["nvd_api_key"] else 6.5  # limites NVD : 50 ou 5 requêtes / 30 s
     out, index = [], 0
     while True:
-        params = urllib.parse.urlencode({
+        query = {
             "lastModStartDate": nvd_date(start), "lastModEndDate": nvd_date(end),
             "resultsPerPage": NVD_PAGE_SIZE, "startIndex": index,
-        })
+        }
+        if keyword:
+            query["keywordSearch"] = keyword
+        params = urllib.parse.urlencode(query)
         data = None
         for attempt in range(5):
             try:
@@ -389,6 +397,12 @@ def cve_products(cve, limit=4):
                     if name not in prods:
                         prods.append(name)
     return prods[:limit] + (["…"] if len(prods) > limit else [])
+
+
+def cve_cpe_text(cve):
+    """Noms de produits (CPE) concaténés, pour la recherche par mots-clés."""
+    return " ".join(m.get("criteria", "") for conf in cve.get("configurations", [])
+                    for node in conf.get("nodes", []) for m in node.get("cpeMatch", []))
 
 
 def keyword_match(cfg, text):
@@ -466,7 +480,9 @@ class Watcher(threading.Thread):
         if cfg["startup_notify"] and cfg["ntfy_topic"] and not quiet_until(cfg):
             ok, msg, _ = ntfy_send(cfg, {
                 "title": "Veilleur CVE démarré", "priority": 1, "tags": ["shield"],
-                "message": f"Seuil : {cfg['min_severity']} · vérification toutes les {cfg['check_interval_min']} min",
+                "message": f"Gravité minimale : {SEVERITY_FR[cfg['min_severity']]} · vérification toutes les "
+                           f"{cfg['check_interval_min']} min"
+                           + (f" · mots-clés : {', '.join(cfg['keywords'])}" if cfg["keywords"] else ""),
             })
             log("Notification de démarrage : " + msg)
         while not self.stop_event.is_set():
@@ -525,7 +541,17 @@ class Watcher(threading.Thread):
                 self.state.d["since"] = (now - timedelta(hours=2)).isoformat()
             since = self.state.d["since"]
 
-        cves = nvd_fetch(cfg, start, now, self.stop_event)
+        if cfg["keywords"]:
+            # on ne demande au NVD que les failles des logiciels suivis (ex : proxmox)
+            found = {}
+            for i, kw in enumerate(cfg["keywords"]):
+                if i:
+                    self.stop_event.wait(0.7 if cfg["nvd_api_key"] else 6.5)
+                for cve in nvd_fetch(cfg, start, now, self.stop_event, keyword=kw):
+                    found[cve["id"]] = cve
+            cves = list(found.values())
+        else:
+            cves = nvd_fetch(cfg, start, now, self.stop_event)
         stats["nvd_seen"] = len(cves)
         min_pub = max((now - timedelta(days=cfg["max_age_days"])).isoformat(), since)
         min_rank = SEVERITY_RANK[cfg["min_severity"]]
@@ -543,7 +569,7 @@ class Watcher(threading.Thread):
             if pub < min_pub:
                 continue  # trop ancienne, ou publiée avant l'installation
             desc = cve_description(cve)
-            if not keyword_match(cfg, desc + " " + json.dumps(cve.get("configurations", []))):
+            if not keyword_match(cfg, desc + " " + cve_cpe_text(cve)):
                 continue
             sev, score, version = cve_severity(cve)
             if sev is None and min_rank > 0:
@@ -590,12 +616,17 @@ class Watcher(threading.Thread):
             # résumés traduits (les 100 premiers, pour ménager le quota DeepL)
             fr_sum, _ = translate_many(cfg, [shorten(t[5], 220) for t in grouped[:100]])
             summaries = fr_sum + [shorten(t[5], 220) for t in grouped[100:]]
-            lines = []
-            for (cve, sev, score, version, pub, _), desc in zip(grouped[:40], summaries):
-                lines.append(f"{cve['id']} · {SEVERITY_STYLE[sev][2]}" + (f" {score}" if score else "")
-                             + " — " + shorten(desc, 70))
-            if len(grouped) > 40:
-                lines.append(f"… et {len(grouped) - 40} autres (voir l'interface web)")
+            # ntfy transforme en pièce jointe tout message > 4096 octets : on reste en dessous
+            lines, size = [], 0
+            for (cve, sev, score, version, pub, _), desc in zip(grouped, summaries):
+                line = (f"{cve['id']} · {SEVERITY_STYLE[sev][2]}" + (f" {score}" if score is not None else "")
+                        + " — " + shorten(desc, 70))
+                if size + len(line.encode()) + 1 > 3700:
+                    break
+                lines.append(line)
+                size += len(line.encode()) + 1
+            if len(lines) < len(grouped):
+                lines.append(f"… et {len(grouped) - len(lines)} autres (voir l'interface web)")
             top = grouped[0][1]
             ok, msg, _ = ntfy_send_retry(cfg, {
                 "title": f"+ {len(grouped)} autres failles",
