@@ -130,28 +130,55 @@ load_current() {
 
 configure_ntfy() {
   title "Serveur ntfy"
-  local url topic mode user pw token
+  local url topic mode user pw token def_url def_topic
+  # tant que rien n'est configuré, on propose le serveur ntfy du réseau local
+  if [ -n "${CUR[ntfy_topic]:-}" ]; then
+    def_url=${CUR[ntfy_url]}; def_topic=${CUR[ntfy_topic]}
+  else
+    def_url="http://192.168.1.208:2586"; def_topic="failles-securite"
+  fi
   while true; do
-    ask url "URL de ton serveur ntfy" "${CUR[ntfy_url]:-https://ntfy.sh}"
+    ask url "URL de ton serveur ntfy" "$def_url"
     [[ "$url" =~ ^https?:// ]] && break
     warn "L'URL doit commencer par http:// ou https://"
   done
   while true; do
-    ask topic "Topic où envoyer les alertes" "${CUR[ntfy_topic]:-failles-securite}"
+    ask topic "Topic où envoyer les alertes" "$def_topic"
     [[ "$topic" =~ ^[A-Za-z0-9_-]{1,64}$ ]] && break
     warn "Lettres, chiffres, - et _ uniquement"
   done
   set_cfg NTFY_URL "$url"
   set_cfg NTFY_TOPIC "$topic"
 
+  # 1 = token (conseillé), 2 = utilisateur + mot de passe, 3 = rien
   local def_mode=1
-  [ "${CUR[has_ntfy_token]:-false}" = true ] && def_mode=2
+  if [ "${CUR[has_ntfy_token]:-false}" != true ] && [ -n "${CUR[ntfy_user]:-}" ]; then def_mode=2; fi
   echo
-  choose mode "Comment ton serveur ntfy est-il protégé ?" "$def_mode" \
-    "Utilisateur + mot de passe" "Token d'accès (tk_…)" "Pas d'authentification"
+  echo "  ${D}Le plus sûr : un compte ntfy qui peut SEULEMENT écrire sur ce topic, avec un token."
+  echo "  Si ce n'est pas déjà fait, lance ces 3 commandes sur le serveur ntfy :"
+  echo "      ntfy user add cve-bot"
+  echo "      ntfy access cve-bot $topic write-only"
+  echo "      ntfy token add cve-bot          ← copie le token tk_… affiché${N}"
+  echo
+  choose mode "Comment le veilleur se connecte à ntfy ?" "$def_mode" \
+    "Token d'accès tk_… (conseillé)" "Utilisateur + mot de passe" "Pas d'authentification"
 
   case $mode in
     1)
+      while true; do
+        if [ "${CUR[has_ntfy_token]:-false}" = true ]; then
+          ask_secret token "Token ntfy (Entrée = garder l'actuel)"
+          break
+        fi
+        ask_secret token "Token ntfy (tk_…)"
+        [ -n "$token" ] && break
+        warn "Le token est obligatoire"
+      done
+      if [ -n "$token" ]; then set_cfg NTFY_TOKEN "$token"; fi
+      set_cfg NTFY_USER ""
+      clear_cfg NTFY_PASSWORD
+      ;;
+    2)
       while true; do
         ask user "Utilisateur ntfy" "${CUR[ntfy_user]:-}"
         [ -n "$user" ] && break
@@ -167,22 +194,8 @@ configure_ntfy() {
         [ -n "$pw" ] && break
         warn "Le mot de passe est obligatoire"
       done
-      [ -n "$pw" ] && set_cfg NTFY_PASSWORD "$pw"
+      if [ -n "$pw" ]; then set_cfg NTFY_PASSWORD "$pw"; fi
       clear_cfg NTFY_TOKEN
-      ;;
-    2)
-      while true; do
-        if [ "${CUR[has_ntfy_token]:-false}" = true ]; then
-          ask_secret token "Token ntfy (Entrée = garder l'actuel)"
-          break
-        fi
-        ask_secret token "Token ntfy"
-        [ -n "$token" ] && break
-        warn "Le token est obligatoire"
-      done
-      [ -n "$token" ] && set_cfg NTFY_TOKEN "$token"
-      set_cfg NTFY_USER ""
-      clear_cfg NTFY_PASSWORD
       ;;
     3)
       set_cfg NTFY_USER ""

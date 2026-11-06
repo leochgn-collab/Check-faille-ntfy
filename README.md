@@ -28,6 +28,15 @@ chmod +x script.sh
 ./script.sh
 ```
 
+**Avant**, sur le serveur ntfy, crée un compte qui peut seulement écrire sur le topic
+(le plus sûr : même si le conteneur est piraté, il ne peut rien lire ni toucher d'autre) :
+
+```bash
+ntfy user add cve-bot
+ntfy access cve-bot failles-securite write-only
+ntfy token add cve-bot      # copie le token tk_… pour le script
+```
+
 Le script pose les questions (serveur ntfy, utilisateur et mot de passe, gravité
 minimale, mots-clés…), envoie une **notification de test**, lance le conteneur et
 t'affiche l'adresse de l'interface web.
