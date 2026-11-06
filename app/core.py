@@ -57,8 +57,12 @@ DEFAULTS = {
     "quiet_start": "19:00",
     "quiet_end": "08:00",
     "timezone": "Europe/Paris",
+    # traduction des descriptions (le NVD ne publie qu'en anglais)
+    "translate_provider": "none",            # none | libretranslate | deepl
+    "libretranslate_url": "http://libretranslate:5000",
+    "deepl_api_key": "",
 }
-SECRET_KEYS = ("ntfy_password", "ntfy_token", "nvd_api_key")
+SECRET_KEYS = ("ntfy_password", "ntfy_token", "nvd_api_key", "deepl_api_key")
 ENV_NAMES = {k: k.upper() for k in DEFAULTS}  # ntfy_url -> NTFY_URL, etc.
 
 
@@ -99,7 +103,9 @@ def normalize(key, value):
         return _to_bool(value)
     if key == "min_severity":
         return str(value).strip().upper()
-    if key == "ntfy_url":
+    if key == "translate_provider":
+        return str(value).strip().lower()
+    if key in ("ntfy_url", "libretranslate_url"):
         return str(value).strip().rstrip("/")
     return str(value).strip() if key != "ntfy_password" else str(value)
 
@@ -124,6 +130,12 @@ def validate(cfg):
         ZoneInfo(cfg["timezone"])
     except Exception:
         errors.append("Fuseau horaire inconnu")
+    if cfg["translate_provider"] not in ("none", "libretranslate", "deepl"):
+        errors.append("Service de traduction inconnu")
+    if cfg["translate_provider"] == "libretranslate" and not re.match(r"^https?://", cfg["libretranslate_url"]):
+        errors.append("L'URL LibreTranslate doit commencer par http:// ou https://")
+    if cfg["translate_provider"] == "deepl" and not cfg["deepl_api_key"]:
+        errors.append("Il faut une clé API DeepL pour utiliser DeepL")
     if errors:
         raise ValueError(" · ".join(errors))
 
@@ -386,6 +398,45 @@ def keyword_match(cfg, text):
     return any(k in text for k in cfg["keywords"])
 
 
+def translate_many(cfg, texts):
+    """Traduit une liste de textes anglais en français.
+    En cas de souci, renvoie les textes d'origine : une alerte ne doit jamais
+    être bloquée par la traduction. Renvoie (textes, ok)."""
+    provider = cfg.get("translate_provider", "none")
+    if provider == "none" or not texts:
+        return list(texts), True
+    try:
+        if provider == "deepl":
+            key = cfg["deepl_api_key"]
+            host = "api-free.deepl.com" if key.endswith(":fx") else "api.deepl.com"
+            req = urllib.request.Request(
+                f"https://{host}/v2/translate",
+                data=json.dumps({"text": list(texts), "source_lang": "EN", "target_lang": "FR"}).encode(),
+                headers={"Authorization": "DeepL-Auth-Key " + key, "Content-Type": "application/json",
+                         "User-Agent": UA}, method="POST")
+            with urllib.request.urlopen(req, timeout=30) as r:
+                out = [t["text"] for t in json.load(r)["translations"]]
+        else:
+            req = urllib.request.Request(
+                cfg["libretranslate_url"].rstrip("/") + "/translate",
+                data=json.dumps({"q": list(texts), "source": "en", "target": "fr",
+                                 "format": "text"}).encode(),
+                headers={"Content-Type": "application/json", "User-Agent": UA}, method="POST")
+            with urllib.request.urlopen(req, timeout=180) as r:
+                out = json.load(r)["translatedText"]
+            if isinstance(out, str):
+                out = [out]
+        if len(out) != len(texts):
+            raise ValueError("réponse incomplète")
+        return out, True
+    except urllib.error.HTTPError as e:
+        why = {403: "clé refusée", 456: "quota DeepL du mois épuisé"}.get(e.code, f"HTTP {e.code}")
+        log(f"Traduction impossible ({why}) : envoi en anglais")
+    except Exception as e:
+        log(f"Traduction impossible ({e}) : envoi en anglais")
+    return list(texts), False
+
+
 def shorten(text, n):
     return text if len(text) <= n else text[:n].rsplit(" ", 1)[0] + "…"
 
@@ -506,7 +557,8 @@ class Watcher(threading.Thread):
         # 2) les plus graves une par une, le reste regroupé en un seul message
         detailed, grouped = todo[:MAX_DETAILED_PER_CYCLE], todo[MAX_DETAILED_PER_CYCLE:]
         all_ok = True
-        for cve, sev, score, version, pub, desc in detailed:
+        fr_detailed, _ = translate_many(cfg, [shorten(t[5], 700) for t in detailed])
+        for (cve, sev, score, version, pub, _), desc in zip(detailed, fr_detailed):
             if self.stop_event.is_set():
                 all_ok = False
                 break
@@ -530,13 +582,16 @@ class Watcher(threading.Thread):
                 stats["error"] = msg
                 all_ok = False
                 break  # on garde la fenêtre : ce sera renvoyé au prochain cycle
-            self._record(cve, sev, score, pub, desc, prods)
+            self._record(cve, sev, score, pub, shorten(desc, 220), prods)
             stats["sent"] += 1
             self.stop_event.wait(SEND_DELAY_S)
 
         if all_ok and grouped:
+            # résumés traduits (les 100 premiers, pour ménager le quota DeepL)
+            fr_sum, _ = translate_many(cfg, [shorten(t[5], 220) for t in grouped[:100]])
+            summaries = fr_sum + [shorten(t[5], 220) for t in grouped[100:]]
             lines = []
-            for cve, sev, score, version, pub, desc in grouped[:40]:
+            for (cve, sev, score, version, pub, _), desc in zip(grouped[:40], summaries):
                 lines.append(f"{cve['id']} · {SEVERITY_STYLE[sev][2]}" + (f" {score}" if score else "")
                              + " — " + shorten(desc, 70))
             if len(grouped) > 40:
@@ -548,8 +603,8 @@ class Watcher(threading.Thread):
                 "tags": SEVERITY_STYLE[top][1][:1],
             }, self.stop_event)
             if ok:
-                for cve, sev, score, version, pub, desc in grouped:
-                    self._record(cve, sev, score, pub, desc, cve_products(cve), grouped=True)
+                for (cve, sev, score, version, pub, _), summary in zip(grouped, summaries):
+                    self._record(cve, sev, score, pub, summary, cve_products(cve), grouped=True)
                 stats["sent"] += len(grouped)
             else:
                 stats["error"] = msg
@@ -559,12 +614,12 @@ class Watcher(threading.Thread):
             with self.state.lock:
                 self.state.d["last_check"] = now.isoformat()
 
-    def _record(self, cve, sev, score, pub, desc, prods, grouped=False):
+    def _record(self, cve, sev, score, pub, summary, prods, grouped=False):
         self.state.d["notified"][cve["id"]] = pub
         self.state.add_history({
             "id": cve["id"], "source": "NVD", "severity": sev, "score": score,
             "published": pub, "sent_at": now_utc().isoformat(),
-            "summary": shorten(desc, 220), "products": prods,
+            "summary": summary, "products": prods,
             "kev": bool(cve.get("cisaExploitAdd")), "grouped": grouped,
         })
 
@@ -587,9 +642,10 @@ class Watcher(threading.Thread):
             text = " ".join(str(v.get(k, "")) for k in
                             ("vendorProject", "product", "vulnerabilityName", "shortDescription"))
             if keyword_match(cfg, text):
+                (name, desc), _ = translate_many(cfg, [v.get("vulnerabilityName", ""),
+                                                       shorten(v.get("shortDescription", ""), 700)])
                 lines = [f"{v.get('vendorProject', '')} {v.get('product', '')}".strip(),
-                         v.get("vulnerabilityName", ""), "",
-                         shorten(v.get("shortDescription", ""), 400)]
+                         name, "", shorten(desc, 400)]
                 if v.get("knownRansomwareCampaignUse") == "Known":
                     lines.append("☠️ Utilisée par des rançongiciels")
                 ok, msg, _ = ntfy_send_retry(cfg, {
@@ -604,7 +660,7 @@ class Watcher(threading.Thread):
                 self.state.add_history({
                     "id": cid, "source": "KEV", "severity": "CRITICAL", "score": None,
                     "published": v.get("dateAdded"), "sent_at": now_utc().isoformat(),
-                    "summary": shorten(v.get("shortDescription", ""), 220),
+                    "summary": shorten(desc, 220),
                     "products": [f"{v.get('vendorProject', '')} {v.get('product', '')}".strip()],
                     "kev": True,
                 })

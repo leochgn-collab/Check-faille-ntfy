@@ -95,6 +95,7 @@ write_env() {
 WEB_PASSWORD='$WEB_PASSWORD'
 WEB_PORT=$WEB_PORT
 WEB_BIND=$WEB_BIND
+COMPOSE_PROFILES=${COMPOSE_PROFILES:-}
 EOF
   )
 }
@@ -259,6 +260,65 @@ configure_misc() {
   fi
 }
 
+configure_language() {
+  title "Langue des alertes"
+  echo "  ${D}Les descriptions des failles sont publiées en anglais.${N}"
+  local def=1 t key
+  case "${CUR[translate_provider]:-none}" in
+    deepl) def=2 ;;
+    none)  # « Non » par défaut seulement si on a déjà répondu non à cette question
+           if [ "${FRESH:-0}" = 0 ] && grep -q '^COMPOSE_PROFILES=' .env 2>/dev/null; then def=3; fi ;;
+  esac
+  choose t "Traduire les alertes en français ?" "$def" \
+    "Oui, avec un traducteur installé ici (gratuit, privé, ~2 Go de disque, conseillé)" \
+    "Oui, avec DeepL (meilleure qualité, clé API gratuite sur deepl.com/pro-api)" \
+    "Non, garder l'anglais"
+  COMPOSE_PROFILES=""
+  case $t in
+    1)
+      set_cfg TRANSLATE_PROVIDER libretranslate
+      set_cfg LIBRETRANSLATE_URL "http://libretranslate:5000"
+      COMPOSE_PROFILES=traduction
+      ;;
+    2)
+      while true; do
+        if [ "${CUR[has_deepl_api_key]:-false}" = true ]; then
+          ask_secret key "Clé API DeepL (Entrée = garder l'actuelle)"
+          break
+        fi
+        ask_secret key "Clé API DeepL"
+        [ -n "$key" ] && break
+        warn "La clé est obligatoire"
+      done
+      if [ -n "$key" ]; then set_cfg DEEPL_API_KEY "$key"; fi
+      set_cfg TRANSLATE_PROVIDER deepl
+      ;;
+    3)
+      set_cfg TRANSLATE_PROVIDER none
+      ;;
+  esac
+}
+
+wait_translation() {
+  [ "$COMPOSE_PROFILES" = traduction ] || [ "$(run_app_exec --show-config | grep '^translate_provider=')" = "translate_provider=deepl" ] || return 0
+  info "Vérification de la traduction (la 1re fois, le traducteur télécharge ses modèles : 2 à 10 min)…"
+  local i out
+  for i in $(seq 1 72); do
+    if out=$(run_app_exec --test-translate 2>/dev/null); then
+      echo
+      ok "Traduction OK : « $out »"
+      return 0
+    fi
+    printf '.'
+    sleep 10
+  done
+  echo
+  warn "Le traducteur ne répond pas encore. Les alertes partiront en anglais en attendant."
+  warn "Regarde ses logs avec : ${DC[*]} logs libretranslate"
+}
+
+run_app_exec() { "${DC[@]}" exec -T "$SERVICE" python main.py "$@"; }
+
 configure_web() {
   title "Interface web"
   while true; do
@@ -321,10 +381,14 @@ do_configure() {
 
   INIT=""
   configure_filters
+  configure_language
   configure_misc
   printf '%s' "$INIT" | run_app --init-config >/dev/null || die "Configuration refusée"
   configure_web
   write_env
+  if [ "$COMPOSE_PROFILES" != traduction ]; then
+    "${DC[@]}" --profile traduction rm -sf libretranslate >/dev/null 2>&1 || true
+  fi
   ok "Configuration enregistrée"
 
   title "Lancement"
@@ -332,6 +396,7 @@ do_configure() {
   sleep 3
   if "${DC[@]}" ps --status running 2>/dev/null | grep -q "$SERVICE" || $SUDO docker ps --format '{{.Names}}' | grep -qx "$SERVICE"; then
     ok "Le veilleur tourne !"
+    wait_translation
   else
     warn "Le conteneur ne semble pas démarré, regarde : ./script.sh logs"
   fi
@@ -375,6 +440,7 @@ case "${1:-config}" in
     detect_docker
     [ -f .env ] || die "Lance d'abord ./script.sh"
     WEB_PORT=$(env_get WEB_PORT); WEB_BIND=$(env_get WEB_BIND); GENERATED_PW=0
+    COMPOSE_PROFILES=$(env_get COMPOSE_PROFILES)
     ask_web_password
     write_env
     "${DC[@]}" up -d --force-recreate

@@ -183,6 +183,24 @@
       </div>
 
       <div class="section">
+        <h3>Langue des alertes</h3>
+        <div class="fields">
+          <div><label>Traduire les descriptions en français</label>
+            <select name="translate_provider">
+              <option value="none">Non (anglais)</option>
+              <option value="libretranslate">Oui — traducteur local (LibreTranslate)</option>
+              <option value="deepl">Oui — DeepL (clé API)</option>
+            </select>
+            <div class="hint">Le traducteur local s'installe avec ./script.sh. Si la traduction échoue, l'alerte part quand même, en anglais.</div></div>
+          <div data-show="libretranslate"><label>Adresse de LibreTranslate</label><input name="libretranslate_url"></div>
+          <div data-show="deepl"><label>Clé API DeepL</label>
+            <div class="secret-row"><input type="password" name="deepl_api_key" autocomplete="new-password">
+              <button type="button" data-clear="deepl_api_key">Effacer</button></div>
+            <div class="hint" data-hint="deepl_api_key"></div></div>
+        </div>
+      </div>
+
+      <div class="section">
         <h3>Heures calmes</h3>
         <div class="check" style="margin-bottom:14px"><input type="checkbox" name="quiet_enabled" id="qe">
           <label for="qe" style="margin:0;color:var(--text)">Pas de notifications pendant ces heures (tout arrive à la fin de la plage, rien n'est perdu)</label></div>
@@ -295,16 +313,23 @@ function renderStatus(s) {
 
 function fillForm(c) {
   const f = $("#cfgForm");
-  for (const k of ["ntfy_url", "ntfy_topic", "ntfy_user", "min_severity", "max_age_days", "check_interval_min", "quiet_start", "quiet_end"]) f[k].value = c[k];
+  for (const k of ["ntfy_url", "ntfy_topic", "ntfy_user", "min_severity", "max_age_days", "check_interval_min", "quiet_start", "quiet_end", "translate_provider", "libretranslate_url"]) f[k].value = c[k];
+  showTranslate();
   f.quiet_enabled.checked = c.quiet_enabled;
   f.keywords.value = (c.keywords || []).join(", ");
   f.kev_enabled.checked = c.kev_enabled; f.startup_notify.checked = c.startup_notify;
-  for (const k of ["ntfy_password", "ntfy_token", "nvd_api_key"]) {
+  for (const k of ["ntfy_password", "ntfy_token", "nvd_api_key", "deepl_api_key"]) {
     f[k].value = ""; f[k].placeholder = c["has_" + k] ? "•••••••• (inchangé)" : "";
     $(`[data-hint="${k}"]`).textContent = c["has_" + k] ? "Enregistré." : "Non défini.";
   }
   toClear.clear();
 }
+
+function showTranslate() {
+  const v = $("#cfgForm").translate_provider.value;
+  $$("[data-show]").forEach(d => d.classList.toggle("hidden", d.dataset.show !== v));
+}
+$("#cfgForm").translate_provider.addEventListener("change", showTranslate);
 
 async function refresh() {
   try { renderStatus(await api("api/status")); } catch (e) { /* géré par api() */ }
@@ -358,7 +383,7 @@ $$("[data-clear]").forEach(b => b.onclick = () => {
 $("#cfgForm").addEventListener("submit", async e => {
   e.preventDefault();
   const f = e.target, config = {};
-  for (const k of ["ntfy_url", "ntfy_topic", "ntfy_user", "ntfy_password", "ntfy_token", "nvd_api_key", "min_severity", "keywords"]) config[k] = f[k].value;
+  for (const k of ["ntfy_url", "ntfy_topic", "ntfy_user", "ntfy_password", "ntfy_token", "nvd_api_key", "min_severity", "keywords", "translate_provider", "libretranslate_url", "deepl_api_key"]) config[k] = f[k].value;
   config.max_age_days = +f.max_age_days.value; config.check_interval_min = +f.check_interval_min.value;
   config.kev_enabled = f.kev_enabled.checked; config.startup_notify = f.startup_notify.checked;
   config.quiet_enabled = f.quiet_enabled.checked; config.quiet_start = f.quiet_start.value; config.quiet_end = f.quiet_end.value;

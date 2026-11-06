@@ -12,5 +12,18 @@ services:
     volumes:
       - data:/data
 
+  # Traducteur anglais -> français installé en local (activé par COMPOSE_PROFILES=traduction
+  # dans .env). Au premier démarrage il télécharge ses modèles (quelques minutes).
+  libretranslate:
+    image: libretranslate/libretranslate:latest
+    container_name: veilleur-cve-traduction
+    restart: unless-stopped
+    profiles: ["traduction"]
+    environment:
+      LT_LOAD_ONLY: "en,fr"
+    volumes:
+      - lt-models:/home/libretranslate/.local
+
 volumes:
   data:
+  lt-models:

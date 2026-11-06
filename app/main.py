@@ -6,6 +6,7 @@ Veilleur CVE -> ntfy
   python main.py --init-config   lit des lignes CLE=valeur_base64 sur stdin et les applique
   python main.py --show-config   affiche la config (sans secrets), format cle=valeur
   python main.py --test-ntfy     envoie une notification de test
+  python main.py --test-translate  vérifie que la traduction fonctionne
 """
 
 import base64
@@ -13,7 +14,7 @@ import os
 import signal
 import sys
 
-from core import Config, State, Watcher, ENV_NAMES, SECRET_KEYS, log, ntfy_send
+from core import Config, State, Watcher, ENV_NAMES, SECRET_KEYS, log, ntfy_send, translate_many
 
 
 def init_config():
@@ -60,6 +61,16 @@ def test_ntfy():
     return 0 if ok else 1
 
 
+def test_translate():
+    cfg = Config().get()
+    if cfg["translate_provider"] == "none":
+        print("Traduction désactivée")
+        return 1
+    (out,), ok = translate_many(cfg, ["A remote attacker can execute arbitrary code on the server."])
+    print(out)
+    return 0 if ok else 1
+
+
 def serve():
     config, state = Config(), State()
     watcher = Watcher(config, state)
@@ -92,4 +103,4 @@ def serve():
 if __name__ == "__main__":
     arg = sys.argv[1] if len(sys.argv) > 1 else ""
     sys.exit({"--init-config": init_config, "--show-config": show_config,
-              "--test-ntfy": test_ntfy}.get(arg, serve)())
+              "--test-ntfy": test_ntfy, "--test-translate": test_translate}.get(arg, serve)())

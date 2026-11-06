@@ -77,6 +77,22 @@ proprement en HTTPS, ajoute un reverse proxy Apache, par exemple sur un sous-dom
 (`a2enmod proxy proxy_http headers` puis `systemctl reload apache2`.)
 Ça marche aussi dans un sous-dossier : `ProxyPass /cve/ http://127.0.0.1:8080/`.
 
+## Alertes en français
+
+Le NVD publie les descriptions en anglais. `./script.sh` propose de les traduire :
+
+- **Traducteur local (LibreTranslate)** : un 2ᵉ conteneur à côté du veilleur. Gratuit, sans
+  compte, rien ne sort du réseau. Environ 2 Go de disque ; au premier démarrage il
+  télécharge ses modèles (quelques minutes).
+- **DeepL** : meilleure qualité, avec une clé API gratuite (500 000 caractères/mois).
+
+Si la traduction échoue, l'alerte part quand même, en anglais.
+
+## Heures calmes
+
+Par défaut, aucune notification de 19 h à 8 h (heure de Paris) : ce qui sort pendant la
+nuit arrive le matin. Réglable dans l'interface.
+
 ## Bon à savoir
 
 - **Volume** : ~100 à 150 nouvelles CVE par jour. « Élevée et plus » ramène ça à
