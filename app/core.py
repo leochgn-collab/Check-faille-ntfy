@@ -24,6 +24,8 @@ KEV_URL = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulner
 KEV_REFRESH_MIN = 60
 NVD_PAGE_SIZE = 2000
 HISTORY_MAX = 200
+MAX_DETAILED_PER_CYCLE = 15   # au-delà : un seul message récapitulatif
+SEND_DELAY_S = 1.5            # pause entre deux notifications (évite le 429 de ntfy)
 
 SEVERITY_RANK = {"NONE": 0, "LOW": 1, "MEDIUM": 2, "HIGH": 3, "CRITICAL": 4}
 # gravité -> (priorité ntfy, tags ntfy, libellé)
@@ -176,7 +178,7 @@ class Config:
 class State:
     FIELDS = {
         "last_check": None, "notified": {}, "history": [], "kev_known": [],
-        "kev_last_fetch": None, "sent_total": 0, "last_error": None, "last_cycle": None,
+        "kev_last_fetch": None, "since": None, "sent_total": 0, "last_error": None, "last_cycle": None,
     }
 
     def __init__(self):
@@ -422,17 +424,22 @@ class Watcher(threading.Thread):
         start = datetime.fromisoformat(last) - timedelta(minutes=10) if last else now - timedelta(hours=2)
         start = max(start, now - timedelta(days=100))  # limite NVD : 120 jours par requête
 
+        # Au tout premier lancement on part de « maintenant » : pas d'avalanche
+        # avec toutes les failles des jours précédents.
+        with self.state.lock:
+            if not self.state.d.get("since"):
+                self.state.d["since"] = (now - timedelta(hours=2)).isoformat()
+            since = self.state.d["since"]
+
         cves = nvd_fetch(cfg, start, now, self.stop_event)
         stats["nvd_seen"] = len(cves)
-        min_pub = (now - timedelta(days=cfg["max_age_days"])).isoformat()
+        min_pub = max((now - timedelta(days=cfg["max_age_days"])).isoformat(), since)
         min_rank = SEVERITY_RANK[cfg["min_severity"]]
         notified = self.state.d["notified"]
-        all_ok = True
 
-        for cve in sorted(cves, key=lambda c: -(cve_severity(c)[1] or 0)):
-            if self.stop_event.is_set():
-                all_ok = False
-                break
+        # 1) sélection des failles à envoyer
+        todo = []
+        for cve in cves:
             cid = cve["id"]
             if cid in notified or cve.get("vulnStatus") == "Rejected":
                 continue
@@ -440,7 +447,7 @@ class Watcher(threading.Thread):
             if "+" not in pub and not pub.endswith("Z"):
                 pub += "+00:00"
             if pub < min_pub:
-                continue  # vieille CVE simplement mise à jour
+                continue  # trop ancienne, ou publiée avant l'installation
             desc = cve_description(cve)
             if not keyword_match(cfg, desc + " " + json.dumps(cve.get("configurations", []))):
                 continue
@@ -450,7 +457,17 @@ class Watcher(threading.Thread):
             if sev is not None and SEVERITY_RANK[sev] < min_rank:
                 notified[cid] = pub  # sous le seuil : ignorée définitivement
                 continue
+            todo.append((cve, sev, score, version, pub, desc))
+        todo.sort(key=lambda t: (not t[0].get("cisaExploitAdd"), -(t[2] or 0)))
 
+        # 2) les plus graves une par une, le reste regroupé en un seul message
+        detailed, grouped = todo[:MAX_DETAILED_PER_CYCLE], todo[MAX_DETAILED_PER_CYCLE:]
+        all_ok = True
+        for cve, sev, score, version, pub, desc in detailed:
+            if self.stop_event.is_set():
+                all_ok = False
+                break
+            cid = cve["id"]
             prio, tags, label = SEVERITY_STYLE[sev]
             lines = [f"Gravité : {label} — {score} (CVSS {version})" if sev
                      else "Gravité : pas encore notée par le NVD"]
@@ -461,7 +478,7 @@ class Watcher(threading.Thread):
                 lines.append("⚠️ Exploitée activement (catalogue CISA KEV)")
                 prio = 5
             lines += ["", shorten(desc, 400)]
-            ok, msg, code = ntfy_send_retry(cfg, {
+            ok, msg, _ = ntfy_send_retry(cfg, {
                 "title": f"{cid} · {label}" + (f" {score}" if score is not None else ""),
                 "message": "\n".join(lines), "priority": prio, "tags": tags,
                 "click": f"https://nvd.nist.gov/vuln/detail/{cid}",
@@ -470,19 +487,43 @@ class Watcher(threading.Thread):
                 stats["error"] = msg
                 all_ok = False
                 break  # on garde la fenêtre : ce sera renvoyé au prochain cycle
-            notified[cid] = pub
+            self._record(cve, sev, score, pub, desc, prods)
             stats["sent"] += 1
-            self.state.add_history({
-                "id": cid, "source": "NVD", "severity": sev, "score": score,
-                "published": pub, "sent_at": now_utc().isoformat(),
-                "summary": shorten(desc, 220), "products": prods,
-                "kev": bool(cve.get("cisaExploitAdd")),
-            })
-            self.stop_event.wait(0.4)
+            self.stop_event.wait(SEND_DELAY_S)
+
+        if all_ok and grouped:
+            lines = []
+            for cve, sev, score, version, pub, desc in grouped[:40]:
+                lines.append(f"{cve['id']} · {SEVERITY_STYLE[sev][2]}" + (f" {score}" if score else "")
+                             + " — " + shorten(desc, 70))
+            if len(grouped) > 40:
+                lines.append(f"… et {len(grouped) - 40} autres (voir l'interface web)")
+            top = grouped[0][1]
+            ok, msg, _ = ntfy_send_retry(cfg, {
+                "title": f"+ {len(grouped)} autres failles",
+                "message": "\n".join(lines), "priority": 3,
+                "tags": SEVERITY_STYLE[top][1][:1],
+            }, self.stop_event)
+            if ok:
+                for cve, sev, score, version, pub, desc in grouped:
+                    self._record(cve, sev, score, pub, desc, cve_products(cve), grouped=True)
+                stats["sent"] += len(grouped)
+            else:
+                stats["error"] = msg
+                all_ok = False
 
         if all_ok:
             with self.state.lock:
                 self.state.d["last_check"] = now.isoformat()
+
+    def _record(self, cve, sev, score, pub, desc, prods, grouped=False):
+        self.state.d["notified"][cve["id"]] = pub
+        self.state.add_history({
+            "id": cve["id"], "source": "NVD", "severity": sev, "score": score,
+            "published": pub, "sent_at": now_utc().isoformat(),
+            "summary": shorten(desc, 220), "products": prods,
+            "kev": bool(cve.get("cisaExploitAdd")), "grouped": grouped,
+        })
 
     # ---- CISA KEV : failles exploitées activement ------------------------
     def kev_cycle(self, cfg, stats):

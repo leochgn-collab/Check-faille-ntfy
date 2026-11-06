@@ -255,6 +255,7 @@ function renderHistory() {
     const a = el("a", "id", it.id); a.href = "https://nvd.nist.gov/vuln/detail/" + encodeURIComponent(it.id); a.target = "_blank"; a.rel = "noopener";
     top.append(a);
     if (it.kev) top.append(el("span", "tag", "exploitée activement"));
+    if (it.grouped) top.append(el("span", "meta", "· dans un récap"));
     top.append(el("span", "meta", "envoyée " + ago(it.sent_at) + (it.products && it.products.length ? " · " + it.products.join(", ") : "")));
     body.append(top, el("div", "desc", it.summary || ""));
     row.append(badge, body); box.append(row);
