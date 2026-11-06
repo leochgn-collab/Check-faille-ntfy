@@ -13,6 +13,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 DATA_DIR = os.getenv("DATA_DIR", "/data")
 CONFIG_FILE = os.path.join(DATA_DIR, "config.json")
@@ -51,6 +52,11 @@ DEFAULTS = {
     "kev_enabled": True,
     "startup_notify": True,
     "paused": False,
+    # heures calmes : aucune notification, tout arrive à la fin de la plage
+    "quiet_enabled": True,
+    "quiet_start": "19:00",
+    "quiet_end": "08:00",
+    "timezone": "Europe/Paris",
 }
 SECRET_KEYS = ("ntfy_password", "ntfy_token", "nvd_api_key")
 ENV_NAMES = {k: k.upper() for k in DEFAULTS}  # ntfy_url -> NTFY_URL, etc.
@@ -89,7 +95,7 @@ def normalize(key, value):
         return sorted({str(k).strip().lower() for k in value if str(k).strip()})
     if key in ("check_interval_min", "max_age_days"):
         return int(value)
-    if key in ("kev_enabled", "startup_notify", "paused"):
+    if key in ("kev_enabled", "startup_notify", "paused", "quiet_enabled"):
         return _to_bool(value)
     if key == "min_severity":
         return str(value).strip().upper()
@@ -110,6 +116,14 @@ def validate(cfg):
         errors.append("L'intervalle doit être entre 5 et 1440 minutes")
     if not 1 <= cfg["max_age_days"] <= 60:
         errors.append("L'âge maximal doit être entre 1 et 60 jours")
+    for k in ("quiet_start", "quiet_end"):
+        if not re.match(r"^([01]\d|2[0-3]):[0-5]\d$", cfg[k]):
+            errors.append("Heures calmes : format HH:MM attendu")
+            break
+    try:
+        ZoneInfo(cfg["timezone"])
+    except Exception:
+        errors.append("Fuseau horaire inconnu")
     if errors:
         raise ValueError(" · ".join(errors))
 
@@ -170,6 +184,27 @@ class Config:
             validate(new)
             self.data = new
             self._save()
+
+
+def quiet_until(cfg, now=None):
+    """Si on est dans les heures calmes, renvoie la fin (datetime UTC), sinon None."""
+    if not cfg.get("quiet_enabled") or cfg["quiet_start"] == cfg["quiet_end"]:
+        return None
+    try:
+        tz = ZoneInfo(cfg["timezone"])
+    except Exception:
+        tz = timezone.utc
+    local = (now or now_utc()).astimezone(tz)
+    sh, sm = map(int, cfg["quiet_start"].split(":"))
+    eh, em = map(int, cfg["quiet_end"].split(":"))
+    t, start, end = local.hour * 60 + local.minute, sh * 60 + sm, eh * 60 + em
+    inside = (start <= t < end) if start < end else (t >= start or t < end)
+    if not inside:
+        return None
+    end_dt = local.replace(hour=eh, minute=em, second=0, microsecond=0)
+    if end_dt <= local:
+        end_dt += timedelta(days=1)
+    return end_dt.astimezone(timezone.utc)
 
 
 # --------------------------------------------------------------------------
@@ -376,7 +411,8 @@ class Watcher(threading.Thread):
 
     def run(self):
         cfg = self.config.get()
-        if cfg["startup_notify"] and cfg["ntfy_topic"]:
+        self.quiet_end = None
+        if cfg["startup_notify"] and cfg["ntfy_topic"] and not quiet_until(cfg):
             ok, msg, _ = ntfy_send(cfg, {
                 "title": "Veilleur CVE démarré", "priority": 1, "tags": ["shield"],
                 "message": f"Seuil : {cfg['min_severity']} · vérification toutes les {cfg['check_interval_min']} min",
@@ -384,14 +420,21 @@ class Watcher(threading.Thread):
             log("Notification de démarrage : " + msg)
         while not self.stop_event.is_set():
             cfg = self.config.get()
+            interval = cfg["check_interval_min"] * 60
+            quiet = quiet_until(cfg)
+            self.quiet_end = quiet.isoformat() if quiet else None
             if cfg["paused"]:
                 log("En pause")
             elif not cfg["ntfy_topic"]:
                 with self.state.lock:
                     self.state.d["last_error"] = "Topic ntfy non configuré"
+            elif quiet:
+                # rien n'est envoyé ; la fenêtre NVD n'avance pas, donc tout
+                # ce qui sort pendant la nuit sera envoyé à la fin de la plage
+                log(f"Heures calmes jusqu'à {quiet.isoformat()}")
+                interval = min(interval, max(30, int((quiet - now_utc()).total_seconds()) + 30))
             else:
                 self.cycle(cfg)
-            interval = cfg["check_interval_min"] * 60
             self.next_check = (now_utc() + timedelta(seconds=interval)).isoformat()
             self.wake.wait(interval)
             self.wake.clear()

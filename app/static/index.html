@@ -183,6 +183,16 @@
       </div>
 
       <div class="section">
+        <h3>Heures calmes</h3>
+        <div class="check" style="margin-bottom:14px"><input type="checkbox" name="quiet_enabled" id="qe">
+          <label for="qe" style="margin:0;color:var(--text)">Pas de notifications pendant ces heures (tout arrive à la fin de la plage, rien n'est perdu)</label></div>
+        <div class="fields">
+          <div><label>De</label><input type="time" name="quiet_start"></div>
+          <div><label>À</label><input type="time" name="quiet_end"></div>
+        </div>
+      </div>
+
+      <div class="section">
         <h3>Fonctionnement</h3>
         <div class="fields">
           <div><label>Vérifier toutes les (minutes)</label><input type="number" name="check_interval_min" min="5" max="1440"></div>
@@ -267,6 +277,7 @@ function renderStatus(s) {
   const pill = $("#statePill");
   if (s.busy) { pill.textContent = "vérification en cours…"; pill.className = "pill busy"; }
   else if (s.paused) { pill.textContent = "en pause"; pill.className = "pill warn"; }
+  else if (s.quiet_until) { pill.textContent = "heures calmes jusqu'à " + new Date(s.quiet_until).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }); pill.className = "pill busy"; }
   else if (!s.configured) { pill.textContent = "à configurer"; pill.className = "pill warn"; }
   else if (s.last_error) { pill.textContent = "erreur"; pill.className = "pill warn"; }
   else { pill.textContent = "actif"; pill.className = "pill ok"; }
@@ -284,7 +295,8 @@ function renderStatus(s) {
 
 function fillForm(c) {
   const f = $("#cfgForm");
-  for (const k of ["ntfy_url", "ntfy_topic", "ntfy_user", "min_severity", "max_age_days", "check_interval_min"]) f[k].value = c[k];
+  for (const k of ["ntfy_url", "ntfy_topic", "ntfy_user", "min_severity", "max_age_days", "check_interval_min", "quiet_start", "quiet_end"]) f[k].value = c[k];
+  f.quiet_enabled.checked = c.quiet_enabled;
   f.keywords.value = (c.keywords || []).join(", ");
   f.kev_enabled.checked = c.kev_enabled; f.startup_notify.checked = c.startup_notify;
   for (const k of ["ntfy_password", "ntfy_token", "nvd_api_key"]) {
@@ -349,6 +361,7 @@ $("#cfgForm").addEventListener("submit", async e => {
   for (const k of ["ntfy_url", "ntfy_topic", "ntfy_user", "ntfy_password", "ntfy_token", "nvd_api_key", "min_severity", "keywords"]) config[k] = f[k].value;
   config.max_age_days = +f.max_age_days.value; config.check_interval_min = +f.check_interval_min.value;
   config.kev_enabled = f.kev_enabled.checked; config.startup_notify = f.startup_notify.checked;
+  config.quiet_enabled = f.quiet_enabled.checked; config.quiet_start = f.quiet_start.value; config.quiet_end = f.quiet_end.value;
   try { const r = await api("api/config", { config, clear: [...toClear] }); fillForm(r.config); toast("✅ Réglages enregistrés"); setTimeout(refresh, 1500); }
   catch (err) { toast("❌ " + err.message, true); }
 });

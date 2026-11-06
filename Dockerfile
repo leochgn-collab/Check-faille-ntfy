@@ -3,7 +3,8 @@ FROM python:3.12-slim
 ENV PYTHONUNBUFFERED=1 \
     DATA_DIR=/data
 
-RUN useradd -r -u 1000 veilleur && mkdir /data && chown veilleur /data
+# tzdata : fuseaux horaires pour les heures calmes
+RUN pip install --no-cache-dir tzdata && useradd -r -u 1000 veilleur && mkdir /data && chown veilleur /data
 
 WORKDIR /app
 COPY app/ .

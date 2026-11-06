@@ -66,6 +66,7 @@ class WebApp:
             "busy": self.watcher.busy,
             "paused": cfg["paused"],
             "next_check": self.watcher.next_check,
+            "quiet_until": getattr(self.watcher, "quiet_end", None),
             "configured": bool(cfg["ntfy_topic"]),
         })
         return snap
