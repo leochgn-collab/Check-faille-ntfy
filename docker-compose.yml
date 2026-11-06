@@ -1,11 +1,16 @@
 services:
   veilleur-cve:
     build: .
+    image: veilleur-cve:latest
     container_name: veilleur-cve
     restart: unless-stopped
     env_file: .env
+    ports:
+      # WEB_BIND=127.0.0.1 : interface accessible seulement depuis le serveur (reverse proxy)
+      # WEB_BIND=0.0.0.0   : accessible depuis tout le réseau
+      - "${WEB_BIND:-127.0.0.1}:${WEB_PORT:-8080}:8080"
     volumes:
-      - veilleur-cve-data:/data
+      - data:/data
 
 volumes:
-  veilleur-cve-data:
+  data:

@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Veilleur CVE</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛡️</text></svg>">
+<style>
+  :root {
+    --bg: #0e1116; --panel: #161b22; --panel2: #1c232d; --line: #2a3340;
+    --text: #e6edf3; --muted: #8b98a8; --accent: #4f8cff; --accent2: #3a6fd6;
+    --crit: #ff4d5e; --high: #ff9b3d; --med: #f2c94c; --low: #3ecf8e; --none: #8b98a8;
+    --radius: 12px;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+         background: var(--bg); color: var(--text); }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 24px 20px 60px; }
+  header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; }
+  header h1 { font-size: 20px; margin: 0; display: flex; gap: 10px; align-items: center; }
+  .pill { font-size: 12px; padding: 3px 10px; border-radius: 99px; background: var(--panel2);
+          border: 1px solid var(--line); color: var(--muted); }
+  .pill.ok { color: var(--low); border-color: #1f5d43; }
+  .pill.warn { color: var(--high); border-color: #6b4318; }
+  .pill.busy { color: var(--accent); border-color: #234682; }
+  .grid { display: grid; gap: 16px; }
+  .stats { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); margin-bottom: 16px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px; }
+  .stat .lbl { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .05em; }
+  .stat .val { font-size: 22px; font-weight: 600; margin-top: 4px; }
+  .stat .sub { color: var(--muted); font-size: 12px; }
+  .error { background: #2a1418; border: 1px solid #5c2630; color: #ffb3bc; padding: 12px 14px;
+           border-radius: 10px; margin-bottom: 16px; display: none; }
+  .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 24px; }
+  button { font: inherit; border: 1px solid var(--line); background: var(--panel2); color: var(--text);
+           padding: 9px 16px; border-radius: 10px; cursor: pointer; }
+  button:hover { border-color: #3d4a5c; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.primary:hover { background: var(--accent2); }
+  button:disabled { opacity: .5; cursor: default; }
+  .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin-bottom: 16px; }
+  .tab { background: none; border: none; border-bottom: 2px solid transparent; border-radius: 0;
+         padding: 10px 14px; color: var(--muted); }
+  .tab.active { color: var(--text); border-bottom-color: var(--accent); }
+  .hidden { display: none !important; }
+  /* historique */
+  .filters { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+  .filters button { padding: 5px 12px; font-size: 13px; }
+  .filters button.on { border-color: var(--accent); color: var(--accent); }
+  .item { display: grid; grid-template-columns: 110px 1fr; gap: 14px; padding: 14px 0;
+          border-bottom: 1px solid var(--line); }
+  .item:last-child { border-bottom: none; }
+  .sev { font-size: 12px; font-weight: 700; padding: 4px 8px; border-radius: 8px; text-align: center;
+         height: fit-content; }
+  .sev.CRITICAL { background: #3a1419; color: var(--crit); }
+  .sev.HIGH { background: #3a2412; color: var(--high); }
+  .sev.MEDIUM { background: #352d10; color: var(--med); }
+  .sev.LOW { background: #10301f; color: var(--low); }
+  .sev.NONE { background: var(--panel2); color: var(--none); }
+  .sev .score { display: block; font-size: 18px; }
+  .item .top { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+  .item .id { font-weight: 600; font-family: ui-monospace, Menlo, Consolas, monospace; }
+  .item .meta { color: var(--muted); font-size: 12px; }
+  .item .desc { color: #c4ccd6; font-size: 14px; margin-top: 4px; }
+  .tag { font-size: 11px; padding: 2px 7px; border-radius: 6px; background: #3a1419; color: var(--crit); }
+  .empty { color: var(--muted); text-align: center; padding: 40px 0; }
+  /* formulaire */
+  form .section { margin-bottom: 26px; }
+  form h3 { font-size: 14px; margin: 0 0 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+  .fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
+  label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 5px; }
+  input, select { width: 100%; font: inherit; color: var(--text); background: var(--bg);
+                  border: 1px solid var(--line); border-radius: 9px; padding: 9px 11px; }
+  input:focus, select:focus { outline: none; border-color: var(--accent); }
+  .hint { font-size: 12px; color: var(--muted); margin-top: 4px; }
+  .check { display: flex; gap: 10px; align-items: center; font-size: 14px; color: var(--text); }
+  .check input { width: auto; }
+  .secret-row { display: flex; gap: 8px; }
+  .secret-row button { padding: 6px 10px; font-size: 12px; white-space: nowrap; }
+  .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--panel2);
+           border: 1px solid var(--line); padding: 11px 18px; border-radius: 10px; opacity: 0;
+           transition: opacity .2s; pointer-events: none; max-width: 90vw; }
+  .toast.show { opacity: 1; }
+  .toast.bad { border-color: #5c2630; color: #ffb3bc; }
+  /* login */
+  .login { max-width: 360px; margin: 14vh auto 0; }
+  .login h1 { font-size: 22px; text-align: center; margin-bottom: 20px; }
+  .login button { width: 100%; margin-top: 12px; }
+  .login .err { color: #ff8f9c; font-size: 13px; min-height: 20px; margin-top: 8px; }
+  @media (max-width: 560px) { .item { grid-template-columns: 1fr; } .sev { width: fit-content; } }
+</style>
+</head>
+<body>
+
+<!-- Connexion -->
+<div id="login" class="login hidden">
+  <h1>🛡️ Veilleur CVE</h1>
+  <form class="card" id="loginForm">
+    <label for="pw">Mot de passe</label>
+    <input type="password" id="pw" autocomplete="current-password" autofocus>
+    <button class="primary" type="submit">Se connecter</button>
+    <div class="err" id="loginErr"></div>
+  </form>
+</div>
+
+<!-- Tableau de bord -->
+<div id="app" class="wrap hidden">
+  <header>
+    <h1>🛡️ Veilleur CVE <span class="pill" id="statePill">…</span></h1>
+    <button id="logout">Déconnexion</button>
+  </header>
+
+  <div class="error" id="errBox"></div>
+
+  <div class="grid stats">
+    <div class="card stat"><div class="lbl">Dernière vérification</div><div class="val" id="sLast">—</div><div class="sub" id="sLastSub"></div></div>
+    <div class="card stat"><div class="lbl">Prochaine</div><div class="val" id="sNext">—</div><div class="sub" id="sNextSub"></div></div>
+    <div class="card stat"><div class="lbl">Alertes envoyées</div><div class="val" id="sTotal">0</div><div class="sub" id="sCycle"></div></div>
+    <div class="card stat"><div class="lbl">Catalogue KEV</div><div class="val" id="sKev">—</div><div class="sub">failles exploitées suivies</div></div>
+  </div>
+
+  <div class="actions">
+    <button class="primary" id="checkNow">↻ Vérifier maintenant</button>
+    <button id="testNtfy">🔔 Notification de test</button>
+    <button id="pauseBtn">⏸ Mettre en pause</button>
+  </div>
+
+  <div class="tabs">
+    <button class="tab active" data-tab="history">Dernières alertes</button>
+    <button class="tab" data-tab="settings">Réglages</button>
+  </div>
+
+  <section id="tab-history" class="card">
+    <div class="filters" id="filters">
+      <button data-f="ALL" class="on">Toutes</button>
+      <button data-f="CRITICAL">Critiques</button>
+      <button data-f="HIGH">Élevées</button>
+      <button data-f="MEDIUM">Moyennes</button>
+      <button data-f="KEV">Exploitées</button>
+    </div>
+    <div id="history"></div>
+  </section>
+
+  <section id="tab-settings" class="card hidden">
+    <form id="cfgForm" autocomplete="off">
+      <div class="section">
+        <h3>Serveur ntfy</h3>
+        <div class="fields">
+          <div><label>URL du serveur</label><input name="ntfy_url" placeholder="https://ntfy.mondomaine.fr" required></div>
+          <div><label>Topic</label><input name="ntfy_topic" placeholder="failles-securite" required></div>
+          <div><label>Utilisateur</label><input name="ntfy_user" autocomplete="off"></div>
+          <div><label>Mot de passe</label>
+            <div class="secret-row"><input type="password" name="ntfy_password" autocomplete="new-password">
+              <button type="button" data-clear="ntfy_password">Effacer</button></div>
+            <div class="hint" data-hint="ntfy_password"></div></div>
+          <div><label>Token d'accès (à la place de l'utilisateur)</label>
+            <div class="secret-row"><input type="password" name="ntfy_token" autocomplete="new-password">
+              <button type="button" data-clear="ntfy_token">Effacer</button></div>
+            <div class="hint" data-hint="ntfy_token"></div></div>
+        </div>
+      </div>
+
+      <div class="section">
+        <h3>Filtrage</h3>
+        <div class="fields">
+          <div><label>Gravité minimale</label>
+            <select name="min_severity">
+              <option value="NONE">Toutes (~100 à 150 / jour)</option>
+              <option value="LOW">Faible et plus</option>
+              <option value="MEDIUM">Moyenne et plus</option>
+              <option value="HIGH">Élevée et plus (~20 à 40 / jour)</option>
+              <option value="CRITICAL">Critique uniquement</option>
+            </select></div>
+          <div><label>Mots-clés (séparés par des virgules)</label>
+            <input name="keywords" placeholder="debian, apache, php, openssh">
+            <div class="hint">Vide = toutes les failles. Sinon, seules celles qui mentionnent un de ces mots.</div></div>
+          <div><label>Ignorer les CVE publiées il y a plus de (jours)</label><input type="number" name="max_age_days" min="1" max="60"></div>
+        </div>
+        <div style="margin-top:14px" class="check"><input type="checkbox" name="kev_enabled" id="kev">
+          <label for="kev" style="margin:0;color:var(--text)">Alerter quand une faille est ajoutée au catalogue des failles <b>exploitées activement</b> (CISA KEV)</label></div>
+      </div>
+
+      <div class="section">
+        <h3>Fonctionnement</h3>
+        <div class="fields">
+          <div><label>Vérifier toutes les (minutes)</label><input type="number" name="check_interval_min" min="5" max="1440"></div>
+          <div><label>Clé API NVD (optionnelle)</label>
+            <div class="secret-row"><input type="password" name="nvd_api_key" autocomplete="new-password">
+              <button type="button" data-clear="nvd_api_key">Effacer</button></div>
+            <div class="hint" data-hint="nvd_api_key"></div></div>
+        </div>
+        <div style="margin-top:14px" class="check"><input type="checkbox" name="startup_notify" id="sn">
+          <label for="sn" style="margin:0;color:var(--text)">Notification quand le veilleur démarre</label></div>
+      </div>
+
+      <button class="primary" type="submit">Enregistrer</button>
+    </form>
+  </section>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = (s, el = document) => el.querySelector(s);
+const $$ = (s, el = document) => [...el.querySelectorAll(s)];
+let current = null, filter = "ALL", toClear = new Set(), timer = null;
+
+async function api(path, body) {
+  const opt = body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
+  const r = await fetch(path, { credentials: "same-origin", ...opt });
+  const data = await r.json().catch(() => ({}));
+  if (r.status === 401 && path !== "api/login") { showLogin(); throw new Error("Non connecté"); }
+  if (!r.ok) throw new Error(data.error || ("Erreur " + r.status));
+  return data;
+}
+
+function toast(msg, bad) {
+  const t = $("#toast");
+  t.textContent = msg; t.className = "toast show" + (bad ? " bad" : "");
+  clearTimeout(t._h); t._h = setTimeout(() => t.className = "toast", 3500);
+}
+
+function fmt(iso) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  return d.toLocaleString("fr-FR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+}
+function ago(iso) {
+  if (!iso) return "";
+  const s = Math.round((Date.now() - new Date(iso)) / 1000);
+  const abs = Math.abs(s), fut = s < 0;
+  const txt = abs < 60 ? abs + " s" : abs < 3600 ? Math.round(abs / 60) + " min" : abs < 86400 ? Math.round(abs / 3600) + " h" : Math.round(abs / 86400) + " j";
+  return fut ? "dans " + txt : "il y a " + txt;
+}
+const SEV_FR = { CRITICAL: "CRITIQUE", HIGH: "ÉLEVÉE", MEDIUM: "MOYENNE", LOW: "FAIBLE", NONE: "NON NOTÉE" };
+
+function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+
+function renderHistory() {
+  const box = $("#history"); box.replaceChildren();
+  let items = (current && current.history) || [];
+  if (filter === "KEV") items = items.filter(i => i.kev);
+  else if (filter !== "ALL") items = items.filter(i => i.severity === filter);
+  if (!items.length) { box.append(el("div", "empty", "Aucune alerte pour l'instant.")); return; }
+  for (const it of items) {
+    const sev = it.severity || "NONE";
+    const row = el("div", "item");
+    const badge = el("div", "sev " + sev);
+    if (it.score != null) badge.append(el("span", "score", it.score));
+    badge.append(document.createTextNode(it.source === "KEV" ? "EXPLOITÉE" : SEV_FR[sev]));
+    const body = el("div");
+    const top = el("div", "top");
+    const a = el("a", "id", it.id); a.href = "https://nvd.nist.gov/vuln/detail/" + encodeURIComponent(it.id); a.target = "_blank"; a.rel = "noopener";
+    top.append(a);
+    if (it.kev) top.append(el("span", "tag", "exploitée activement"));
+    top.append(el("span", "meta", "envoyée " + ago(it.sent_at) + (it.products && it.products.length ? " · " + it.products.join(", ") : "")));
+    body.append(top, el("div", "desc", it.summary || ""));
+    row.append(badge, body); box.append(row);
+  }
+}
+
+function renderStatus(s) {
+  current = s;
+  const pill = $("#statePill");
+  if (s.busy) { pill.textContent = "vérification en cours…"; pill.className = "pill busy"; }
+  else if (s.paused) { pill.textContent = "en pause"; pill.className = "pill warn"; }
+  else if (!s.configured) { pill.textContent = "à configurer"; pill.className = "pill warn"; }
+  else if (s.last_error) { pill.textContent = "erreur"; pill.className = "pill warn"; }
+  else { pill.textContent = "actif"; pill.className = "pill ok"; }
+  $("#sLast").textContent = fmt(s.last_check); $("#sLastSub").textContent = ago(s.last_check);
+  $("#sNext").textContent = s.paused ? "en pause" : fmt(s.next_check); $("#sNextSub").textContent = s.paused ? "" : ago(s.next_check);
+  $("#sTotal").textContent = s.sent_total;
+  $("#sCycle").textContent = s.last_cycle ? `dernier cycle : ${s.last_cycle.nvd_seen} analysées, ${s.last_cycle.sent + s.last_cycle.kev_sent} envoyées` : "";
+  $("#sKev").textContent = s.kev_count ? s.kev_count.toLocaleString("fr-FR") : "—";
+  const eb = $("#errBox");
+  eb.style.display = s.last_error ? "block" : "none"; eb.textContent = s.last_error ? "⚠️ " + s.last_error : "";
+  $("#checkNow").disabled = s.busy;
+  $("#pauseBtn").textContent = s.paused ? "▶ Reprendre" : "⏸ Mettre en pause";
+  renderHistory();
+}
+
+function fillForm(c) {
+  const f = $("#cfgForm");
+  for (const k of ["ntfy_url", "ntfy_topic", "ntfy_user", "min_severity", "max_age_days", "check_interval_min"]) f[k].value = c[k];
+  f.keywords.value = (c.keywords || []).join(", ");
+  f.kev_enabled.checked = c.kev_enabled; f.startup_notify.checked = c.startup_notify;
+  for (const k of ["ntfy_password", "ntfy_token", "nvd_api_key"]) {
+    f[k].value = ""; f[k].placeholder = c["has_" + k] ? "•••••••• (inchangé)" : "";
+    $(`[data-hint="${k}"]`).textContent = c["has_" + k] ? "Enregistré." : "Non défini.";
+  }
+  toClear.clear();
+}
+
+async function refresh() {
+  try { renderStatus(await api("api/status")); } catch (e) { /* géré par api() */ }
+}
+
+async function showApp() {
+  $("#login").classList.add("hidden"); $("#app").classList.remove("hidden");
+  await refresh();
+  fillForm(await api("api/config"));
+  clearInterval(timer); timer = setInterval(refresh, 10000);
+}
+function showLogin() {
+  clearInterval(timer);
+  $("#app").classList.add("hidden"); $("#login").classList.remove("hidden"); $("#pw").focus();
+}
+
+$("#loginForm").addEventListener("submit", async e => {
+  e.preventDefault(); $("#loginErr").textContent = "";
+  try { await api("api/login", { password: $("#pw").value }); $("#pw").value = ""; showApp(); }
+  catch (err) { $("#loginErr").textContent = err.message; }
+});
+$("#logout").onclick = async () => { await api("api/logout", {}).catch(() => {}); showLogin(); };
+
+$("#checkNow").onclick = async () => {
+  try { await api("api/check-now", {}); toast("Vérification lancée"); setTimeout(refresh, 1500); }
+  catch (e) { toast(e.message, true); }
+};
+$("#testNtfy").onclick = async () => {
+  try { const r = await api("api/test-ntfy", {}); toast("✅ " + r.message); }
+  catch (e) { toast("❌ " + e.message, true); }
+};
+$("#pauseBtn").onclick = async () => {
+  try { await api("api/config", { config: { paused: !current.paused } }); refresh(); }
+  catch (e) { toast(e.message, true); }
+};
+
+$$(".tab").forEach(t => t.onclick = () => {
+  $$(".tab").forEach(x => x.classList.toggle("active", x === t));
+  $("#tab-history").classList.toggle("hidden", t.dataset.tab !== "history");
+  $("#tab-settings").classList.toggle("hidden", t.dataset.tab !== "settings");
+});
+$$("#filters button").forEach(b => b.onclick = () => {
+  filter = b.dataset.f; $$("#filters button").forEach(x => x.classList.toggle("on", x === b)); renderHistory();
+});
+$$("[data-clear]").forEach(b => b.onclick = () => {
+  const k = b.dataset.clear; toClear.add(k);
+  $("#cfgForm")[k].value = ""; $("#cfgForm")[k].placeholder = "sera effacé à l'enregistrement";
+  $(`[data-hint="${k}"]`).textContent = "Sera effacé.";
+});
+
+$("#cfgForm").addEventListener("submit", async e => {
+  e.preventDefault();
+  const f = e.target, config = {};
+  for (const k of ["ntfy_url", "ntfy_topic", "ntfy_user", "ntfy_password", "ntfy_token", "nvd_api_key", "min_severity", "keywords"]) config[k] = f[k].value;
+  config.max_age_days = +f.max_age_days.value; config.check_interval_min = +f.check_interval_min.value;
+  config.kev_enabled = f.kev_enabled.checked; config.startup_notify = f.startup_notify.checked;
+  try { const r = await api("api/config", { config, clear: [...toClear] }); fillForm(r.config); toast("✅ Réglages enregistrés"); setTimeout(refresh, 1500); }
+  catch (err) { toast("❌ " + err.message, true); }
+});
+
+api("api/status").then(() => showApp()).catch(() => {});
+</script>
+</body>
+</html>
