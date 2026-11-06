@@ -1,0 +1,11 @@
+services:
+  veilleur-cve:
+    build: .
+    container_name: veilleur-cve
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - veilleur-cve-data:/data
+
+volumes:
+  veilleur-cve-data:
